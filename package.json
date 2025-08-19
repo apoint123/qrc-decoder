@@ -40,9 +40,11 @@
     "@types/node": "^24",
     "@types/pako": "^2",
     "jest": "^30",
-    "pako": "^2",
     "ts-jest": "^29",
     "typescript": "^5"
+  },
+  "dependencies": {
+    "pako": "^2"
   },
   "packageManager": "pnpm@10.14.0"
 }
