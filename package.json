@@ -1,0 +1,48 @@
+{
+  "name": "qrc-decoder",
+  "version": "1.0.0",
+  "description": "A TypeScript library for encrypting and decrypting QRC lyrics format.",
+  "main": "./dist/qrc_codec.js",
+  "types": "./dist/qrc_codec.d.ts",
+  "exports": {
+    "require": "./dist/qrc_codec.js",
+    "import": "./dist/qrc_codec.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "test": "jest",
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apoint123/qrc-decoder.git"
+  },
+  "keywords": [
+    "qrc",
+    "lyrics",
+    "qqmusic",
+    "lrc",
+    "decoder",
+    "encoder",
+    "typescript"
+  ],
+  "author": "apoint123<vpnzaph@outlook.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/apoint123/qrc-decoder/issues"
+  },
+  "homepage": "https://github.com/apoint123/qrc-decoder",
+  "devDependencies": {
+    "@types/jest": "^30",
+    "@types/node": "^24",
+    "@types/pako": "^2",
+    "jest": "^30",
+    "pako": "^2",
+    "ts-jest": "^29",
+    "typescript": "^5"
+  },
+  "packageManager": "pnpm@10.14.0"
+}
