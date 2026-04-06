@@ -1,6 +1,6 @@
 {
 	"name": "qrc-decoder",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"description": "A TypeScript library for encrypting and decrypting QRC lyrics format.",
 	"main": "./dist/qrc_codec.mjs",
 	"module": "./dist/qrc_codec.mjs",
