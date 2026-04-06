@@ -1,3 +1,4 @@
+import { describe, expect, it } from "bun:test";
 import { decryptQrc, encryptQrc } from "../src/qrc_codec";
 
 describe("QRC Codec", () => {

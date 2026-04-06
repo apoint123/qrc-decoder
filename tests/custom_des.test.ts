@@ -1,3 +1,4 @@
+import { describe, expect, it } from "bun:test";
 import { KEY_1 } from "../src/constants";
 import { keySchedule, Mode } from "../src/custom_des";
 
