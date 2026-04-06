@@ -103,7 +103,7 @@ function decompress(data: Uint8Array): Uint8Array {
  * @param hexData 十六进制格式的字符串，代表被加密的歌词数据
  * @returns 被解密出来的歌词字符串，是前后有 XML 混合的 QRC 歌词
  */
-export function decryptQrcHex(encryptedHexString: string): string {
+export function decryptQrc(encryptedHexString: string): string {
 	const encryptedBytes = hexToUint8Array(encryptedHexString);
 
 	if (encryptedBytes.length % DES_BLOCK_SIZE !== 0) {
@@ -128,7 +128,7 @@ export function decryptQrcHex(encryptedHexString: string): string {
  * @param plaintext 明文字符串
  * @returns 十六进制格式的字符串，代表被加密的歌词数据
  */
-export function encryptQrcHex(plaintext: string): string {
+export function encryptQrc(plaintext: string): string {
 	const textBytes = new TextEncoder().encode(plaintext);
 
 	const compressedData = deflate(textBytes);
