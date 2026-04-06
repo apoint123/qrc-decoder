@@ -9,7 +9,7 @@
 
 import { deflate, inflate } from "pako";
 import { KEY_1, KEY_2, KEY_3 } from "./constants";
-import { desCrypt, keySchedule, Mode } from "./custom_des";
+import { desCrypt, type KeySchedule, keySchedule, Mode } from "./custom_des";
 import { hexToUint8Array, uint8ArrayToHex } from "./utils";
 
 const DES_BLOCK_SIZE = 8;
@@ -18,8 +18,8 @@ const DES_BLOCK_SIZE = 8;
  * 非标准 3DES 编解码器
  */
 class QqMusicCodec {
-	private readonly encryptSchedule: number[][][];
-	private readonly decryptSchedule: number[][][];
+	private readonly encryptSchedule: KeySchedule[];
+	private readonly decryptSchedule: KeySchedule[];
 
 	constructor() {
 		// 解密流程 D(K3) -> E(K2) -> D(K1)
@@ -98,10 +98,12 @@ function decompress(data: Uint8Array): Uint8Array {
 }
 
 /**
- * 对加密文本执行解密操作。
- * @param encryptedHexString 加密的十六进制字符串
+ * 解密十六进制字符串格式的 Qrc 歌词数据
+ * 解密后可去头尾 XML 数据后通过调用 `parseQrc` 解析歌词行
+ * @param hexData 十六进制格式的字符串，代表被加密的歌词数据
+ * @returns 被解密出来的歌词字符串，是前后有 XML 混合的 QRC 歌词
  */
-export function decryptQrc(encryptedHexString: string): string {
+export function decryptQrcHex(encryptedHexString: string): string {
 	const encryptedBytes = hexToUint8Array(encryptedHexString);
 
 	if (encryptedBytes.length % DES_BLOCK_SIZE !== 0) {
@@ -122,10 +124,11 @@ export function decryptQrc(encryptedHexString: string): string {
 }
 
 /**
- * 对明文歌词执行加密操作。
+ * 对明文执行加密操作。
  * @param plaintext 明文字符串
+ * @returns 十六进制格式的字符串，代表被加密的歌词数据
  */
-export function encryptQrc(plaintext: string): string {
+export function encryptQrcHex(plaintext: string): string {
 	const textBytes = new TextEncoder().encode(plaintext);
 
 	const compressedData = deflate(textBytes);

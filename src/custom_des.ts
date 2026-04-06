@@ -27,8 +27,7 @@ export enum Mode {
 	Decrypt,
 }
 
-type SubKey = number[];
-type KeySchedule = SubKey[];
+export type KeySchedule = Int32Array;
 
 /**
  * 从8字节密钥中根据置换表提取位，生成一个 BigInt。
@@ -44,22 +43,23 @@ type KeySchedule = SubKey[];
  */
 function permuteFromKeyBytes(key: Uint8Array, table: number[]): bigint {
 	let output = 0n;
-	const outputLen = BigInt(table.length);
+	let currentBitMask = 1n << BigInt(table.length - 1);
 
 	for (let i = 0; i < table.length; i++) {
 		const pos = table[i];
 
-		const wordIndex = Math.floor(pos / 32);
-		const bitInWord = pos % 32;
-		const byteInWord = Math.floor(bitInWord / 8);
-		const bitInByte = bitInWord % 8;
+		const wordIndex = pos >> 5;
+		const bitInWord = pos & 31;
+		const byteInWord = bitInWord >> 3;
+		const bitInByte = bitInWord & 7;
 		const byteIndex = wordIndex * 4 + 3 - byteInWord;
 
 		const bit = (key[byteIndex] >> (7 - bitInByte)) & 1;
 
 		if (bit) {
-			output |= 1n << (outputLen - 1n - BigInt(i));
+			output |= currentBitMask;
 		}
+		currentBitMask >>= 1n;
 	}
 	return output;
 }
@@ -85,15 +85,14 @@ function rotateLeft28Bit(value: bigint, amount: number): bigint {
  * @param mode 加密或解密模式
  */
 export function keySchedule(key: Uint8Array, mode: Mode): KeySchedule {
-	const schedule: number[][] = Array.from({ length: 16 }, () =>
-		Array(6).fill(0),
-	);
+	// 预先分配连续的内存空间
+	const schedule = new Int32Array(32);
 
 	// 应用 PC-1
 	const c0 = permuteFromKeyBytes(key, KEY_PERM_C);
 	const d0 = permuteFromKeyBytes(key, KEY_PERM_D);
 
-	// 将28位的结果左移4位，以匹配 `rotate_left_28bit_in_u32` 对高位对齐的期望。
+	// 将28位的结果左移4位，以匹配 `rotateLeft28Bit` 对高位对齐的期望。
 	let c = c0 << 4n;
 	let d = d0 << 4n;
 
@@ -119,12 +118,21 @@ export function keySchedule(key: Uint8Array, mode: Mode): KeySchedule {
 			}
 		}
 
-		// 将48位的 BigInt 转换为6个字节的 Uint8Array
-		const subkeyBytes = [];
-		for (let j = 5; j >= 0; j--) {
-			subkeyBytes.push(Number((subkey48bit >> BigInt(j * 8)) & 0xffn));
-		}
-		schedule[toGen] = subkeyBytes;
+		// 提取高 24 位 (由第 5, 4, 3 字节组成)
+		const b5 = Number((subkey48bit >> 40n) & 0xffn);
+		const b4 = Number((subkey48bit >> 32n) & 0xffn);
+		const b3 = Number((subkey48bit >> 24n) & 0xffn);
+		const high24 = (b5 << 16) | (b4 << 8) | b3;
+
+		// 提取低 24 位 (由第 2, 1, 0 字节组成)
+		const b2 = Number((subkey48bit >> 16n) & 0xffn);
+		const b1 = Number((subkey48bit >> 8n) & 0xffn);
+		const b0 = Number(subkey48bit & 0xffn);
+		const low24 = (b2 << 16) | (b1 << 8) | b0;
+
+		// 存储到一维数组中
+		schedule[toGen * 2] = high24;
+		schedule[toGen * 2 + 1] = low24;
 	}
 
 	return schedule;
@@ -146,21 +154,12 @@ const INV_IP_RULE: number[] = [
 	52, 20, 60, 28,
 ];
 
-// 查找表生成
-type PermutationTable = [number, number][]; // [left, right]
+const IP_LEFT_TABLE = new Int32Array(2048);
+const IP_RIGHT_TABLE = new Int32Array(2048);
+const INV_IP_LEFT_TABLE = new Int32Array(2048);
+const INV_IP_RIGHT_TABLE = new Int32Array(2048);
 
-function generatePermutationTables(): {
-	ipTable: PermutationTable[];
-	invIpTable: bigint[][];
-} {
-	const ipTable: PermutationTable[] = Array.from({ length: 8 }, () =>
-		Array(256).fill([0, 0]),
-	);
-	const invIpTable: bigint[][] = Array.from({ length: 8 }, () =>
-		Array(256).fill(0n),
-	);
-
-	// 对单个 64 位 BigInt 应用置换
+function generatePermutationTables(): void {
 	const applyPermutation = (input: bigint, rule: number[]): bigint => {
 		let output = 0n;
 		for (let i = 0; i < 64; i++) {
@@ -177,26 +176,24 @@ function generatePermutationTables(): {
 		for (let byteVal = 0; byteVal < 256; byteVal++) {
 			const input = BigInt(byteVal) << BigInt(56 - bytePos * 8);
 			const permuted = applyPermutation(input, IP_RULE);
-			ipTable[bytePos][byteVal] = [
-				Number((permuted >> 32n) & 0xffffffffn),
-				Number(permuted & 0xffffffffn),
-			];
+			const idx = (bytePos << 8) | byteVal;
+			IP_LEFT_TABLE[idx] = Number((permuted >> 32n) & 0xffffffffn);
+			IP_RIGHT_TABLE[idx] = Number(permuted & 0xffffffffn);
 		}
 	}
 
-	// 生成 InvIP 结果查找表
+	// 生成 InvIP 结果查找表 (一维 TypedArray，分为左右 32 位以避免 BigInt)
 	for (let blockPos = 0; blockPos < 8; blockPos++) {
 		for (let blockVal = 0; blockVal < 256; blockVal++) {
 			const input = BigInt(blockVal) << BigInt(56 - blockPos * 8);
-			invIpTable[blockPos][blockVal] = applyPermutation(input, INV_IP_RULE);
+			const permuted = applyPermutation(input, INV_IP_RULE);
+			const idx = (blockPos << 8) | blockVal;
+			INV_IP_LEFT_TABLE[idx] = Number((permuted >> 32n) & 0xffffffffn);
+			INV_IP_RIGHT_TABLE[idx] = Number(permuted & 0xffffffffn);
 		}
 	}
-
-	return { ipTable, invIpTable };
 }
-
-const { ipTable: IP_TABLE, invIpTable: INV_IP_TABLE } =
-	generatePermutationTables();
+generatePermutationTables();
 
 /**
  * 计算 DES S-盒的查找索引。
@@ -223,67 +220,92 @@ function applyQqPboxPermutation(input: number): number {
 	return output;
 }
 
+const SP_TABLE = new Int32Array(512);
+
 /**
  * 生成 S-P 盒合并查找表以提高性能。
  */
-function generateSpTables(): number[][] {
-	const spTables: number[][] = Array.from({ length: 8 }, () =>
-		Array(64).fill(0),
-	);
+function generateSpTables(): void {
 	for (let sBoxIdx = 0; sBoxIdx < 8; sBoxIdx++) {
 		for (let sBoxInput = 0; sBoxInput < 64; sBoxInput++) {
 			const sBoxIndex = calculateSboxIndex(sBoxInput);
 			const fourBitOutput = S_BOXES[sBoxIdx][sBoxIndex];
 			const prePBoxVal = fourBitOutput << (28 - sBoxIdx * 4);
-			spTables[sBoxIdx][sBoxInput] = applyQqPboxPermutation(prePBoxVal);
+			SP_TABLE[(sBoxIdx << 6) | sBoxInput] = applyQqPboxPermutation(prePBoxVal);
 		}
 	}
-	return spTables;
 }
+generateSpTables();
 
-// 预先生成 S-P 查找表
-const SP_TABLES = generateSpTables();
+const EBOX_HIGH_TABLE = new Int32Array(1024);
+const EBOX_LOW_TABLE = new Int32Array(1024);
 
-/**
- * 对一个32位整数应用 E-Box 扩展置换，生成一个48位的结果 (以BigInt表示)。
- * @param input 32位的右半部分数据 (R_i-1)
- */
-function applyEBoxPermutation(input: number): bigint {
-	let output = 0n;
-	for (let i = 0; i < 48; i++) {
-		const sourceBitPos = E_BOX_TABLE[i];
-		const shiftAmount = 32 - sourceBitPos;
-		const bit = (input >> shiftAmount) & 1;
-		if (bit) {
-			output |= 1n << BigInt(47 - i);
+function generateEBoxTables(): void {
+	for (let chunkIdx = 0; chunkIdx < 4; chunkIdx++) {
+		const shiftIn32 = (3 - chunkIdx) * 8;
+
+		for (let byteVal = 0; byteVal < 256; byteVal++) {
+			let high24 = 0;
+			let low24 = 0;
+			const input = byteVal << shiftIn32;
+
+			for (let i = 0; i < 24; i++) {
+				const sourceBitPos = E_BOX_TABLE[i];
+				const bit = (input >>> (32 - sourceBitPos)) & 1;
+				if (bit) {
+					high24 |= 1 << (23 - i);
+				}
+			}
+
+			for (let i = 24; i < 48; i++) {
+				const sourceBitPos = E_BOX_TABLE[i];
+				const bit = (input >>> (32 - sourceBitPos)) & 1;
+				if (bit) {
+					low24 |= 1 << (47 - i);
+				}
+			}
+
+			const tableIdx = (chunkIdx << 8) | byteVal;
+			EBOX_HIGH_TABLE[tableIdx] = high24;
+			EBOX_LOW_TABLE[tableIdx] = low24;
 		}
 	}
-	return output;
 }
+generateEBoxTables();
 
 /**
  * DES 的 F 函数。
  */
-function fFunction(state: number, key: number[]): number {
-	const keyU64 =
-		(BigInt(key[0]) << 40n) |
-		(BigInt(key[1]) << 32n) |
-		(BigInt(key[2]) << 24n) |
-		(BigInt(key[3]) << 16n) |
-		(BigInt(key[4]) << 8n) |
-		BigInt(key[5]);
-	const expandedState = applyEBoxPermutation(state);
-	const xorResult = expandedState ^ keyU64;
+function fFunction(state: number, keyHigh24: number, keyLow24: number): number {
+	// 将 32 位状态拆分为 4 个字节，直接查表并进行按位或拼接
+	const b0 = (state >>> 24) & 0xff;
+	const b1 = (state >>> 16) & 0xff;
+	const b2 = (state >>> 8) & 0xff;
+	const b3 = state & 0xff;
+
+	const eboxHigh24 =
+		EBOX_HIGH_TABLE[b0] |
+		EBOX_HIGH_TABLE[256 | b1] |
+		EBOX_HIGH_TABLE[512 | b2] |
+		EBOX_HIGH_TABLE[768 | b3];
+	const eboxLow24 =
+		EBOX_LOW_TABLE[b0] |
+		EBOX_LOW_TABLE[256 | b1] |
+		EBOX_LOW_TABLE[512 | b2] |
+		EBOX_LOW_TABLE[768 | b3];
+
+	const xorHigh24 = eboxHigh24 ^ keyHigh24;
+	const xorLow24 = eboxLow24 ^ keyLow24;
 
 	return (
-		SP_TABLES[0][Number((xorResult >> 42n) & 0x3fn)] |
-		SP_TABLES[1][Number((xorResult >> 36n) & 0x3fn)] |
-		SP_TABLES[2][Number((xorResult >> 30n) & 0x3fn)] |
-		SP_TABLES[3][Number((xorResult >> 24n) & 0x3fn)] |
-		SP_TABLES[4][Number((xorResult >> 18n) & 0x3fn)] |
-		SP_TABLES[5][Number((xorResult >> 12n) & 0x3fn)] |
-		SP_TABLES[6][Number((xorResult >> 6n) & 0x3fn)] |
-		SP_TABLES[7][Number(xorResult & 0x3fn)]
+		SP_TABLE[(xorHigh24 >>> 18) & 0x3f] |
+		SP_TABLE[64 | ((xorHigh24 >>> 12) & 0x3f)] |
+		SP_TABLE[128 | ((xorHigh24 >>> 6) & 0x3f)] |
+		SP_TABLE[192 | (xorHigh24 & 0x3f)] |
+		SP_TABLE[256 | ((xorLow24 >>> 18) & 0x3f)] |
+		SP_TABLE[320 | ((xorLow24 >>> 12) & 0x3f)] |
+		SP_TABLE[384 | ((xorLow24 >>> 6) & 0x3f)] |
+		SP_TABLE[448 | (xorLow24 & 0x3f)]
 	);
 }
 
@@ -302,25 +324,40 @@ export function desCrypt(
 	let left = 0;
 	let right = 0;
 	for (let i = 0; i < 8; i++) {
-		const [l, r] = IP_TABLE[i][input[i]];
-		left |= l;
-		right |= r;
+		const idx = (i << 8) | input[i];
+		left |= IP_LEFT_TABLE[idx];
+		right |= IP_RIGHT_TABLE[idx];
 	}
 
 	for (let i = 0; i < 15; i++) {
 		const temp = right;
-		right = (left ^ fFunction(right, keySchedule[i])) >>> 0;
+		right =
+			(left ^ fFunction(right, keySchedule[i * 2], keySchedule[i * 2 + 1])) >>>
+			0;
 		left = temp;
 	}
-	left = (left ^ fFunction(right, keySchedule[15])) >>> 0;
+	left = (left ^ fFunction(right, keySchedule[30], keySchedule[31])) >>> 0;
 
-	let result = 0n;
+	let outLeft = 0;
+	let outRight = 0;
 	for (let i = 0; i < 4; i++) {
-		result |= INV_IP_TABLE[i][(left >> (24 - i * 8)) & 0xff];
-		result |= INV_IP_TABLE[i + 4][(right >> (24 - i * 8)) & 0xff];
+		// 分别计算左侧 32 位和右侧 32 位在 INV_IP 阶段的表现
+		const idxL = (i << 8) | ((left >>> (24 - i * 8)) & 0xff);
+		outLeft |= INV_IP_LEFT_TABLE[idxL];
+		outRight |= INV_IP_RIGHT_TABLE[idxL];
+
+		const idxR = ((i + 4) << 8) | ((right >>> (24 - i * 8)) & 0xff);
+		outLeft |= INV_IP_LEFT_TABLE[idxR];
+		outRight |= INV_IP_RIGHT_TABLE[idxR];
 	}
 
-	for (let i = 0; i < 8; i++) {
-		output[i] = Number((result >> BigInt(56 - i * 8)) & 0xffn);
-	}
+	// 使用按位移位进行输出数组写入
+	output[0] = (outLeft >>> 24) & 0xff;
+	output[1] = (outLeft >>> 16) & 0xff;
+	output[2] = (outLeft >>> 8) & 0xff;
+	output[3] = outLeft & 0xff;
+	output[4] = (outRight >>> 24) & 0xff;
+	output[5] = (outRight >>> 16) & 0xff;
+	output[6] = (outRight >>> 8) & 0xff;
+	output[7] = outRight & 0xff;
 }
